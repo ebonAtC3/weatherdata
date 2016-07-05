@@ -108,3 +108,6 @@ buildNumber.properties
 .mvn/timing.properties
 src/main/resources/
 
+### Data ###
+data/output/*
+data/temp/*
