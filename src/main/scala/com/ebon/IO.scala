@@ -1,15 +1,19 @@
 package com.ebon
 
 
+import java.io.File
 import java.sql.Timestamp
 import java.time.{ZoneId, ZonedDateTime}
+
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row, SQLContext}
 import com.ebon.DataValidation._
 import com.ebon.Utils._
+import org.apache.hadoop.fs.FileUtil
 
 
-object LoadingFile {
+object IO {
   def loadObservations(sqlContext: SQLContext, path: String): DataFrame = {
     val rowRdd = sqlContext.sparkContext.textFile(path).map {
       line =>
@@ -59,5 +63,22 @@ object LoadingFile {
 
     val schema = StructType(fields)
     sqlContext.createDataFrame(rowRdd, schema)
+  }
+
+  def writeOutput(outputRdd: RDD[String]) ={
+    val tempDestFile = "../weatherdata/data/temp/partitionsweathertestdata.txt"
+    val tempDestDir = "../weatherdata/data/temp"
+    FileUtil.fullyDelete(new File(tempDestFile))
+
+    val dest = "../weatherdata/data/output/weathertestdata.txt"
+    FileUtil.fullyDelete(new File(dest))
+
+    outputRdd.saveAsTextFile(tempDestFile)
+
+    println("######################### Merging temp partitions")
+    mergePartitions(tempDestFile, dest)
+
+    println("######################### Cleaning temp folder")
+    FileUtil.fullyDeleteContents(new File(tempDestDir))
   }
 }

@@ -2,11 +2,9 @@ package com.ebon
 
 
 import com.ebon.Spark._
-import com.ebon.LoadingFile._
+import com.ebon.IO._
 import com.ebon.Utils._
 import java.time.{LocalDateTime, ZoneId, ZonedDateTime}
-import java.io.File
-import org.apache.hadoop.fs._
 import com.cloudera.sparkts._
 import com.cloudera.sparkts.models.ARIMA
 import org.joda.time._
@@ -14,26 +12,22 @@ import org.joda.time.format.DateTimeFormat
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types._
 import sqlContext.implicits._
-import org.apache.spark.sql.functions.{col, udf}
 
 
 object TimeSeries {
   def runTimeSeries(): Unit ={
 
+    // TODO: Pass as a user parameter
     val extraDays = 731
 
-    val from = DateTime.parse("2009-04-30 00:00:00",
-      DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss"))
-
-    val to = DateTime.parse("2011-04-30 00:00:00",
-      DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss"))
-
+    val from = DateTime.parse("2009-04-30 00:00:00", DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss"))
+    val to = DateTime.parse("2011-04-30 00:00:00", DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss"))
     val dateRangeRdd = sc.parallelize(calculateDateRange(from, to, extraDays))
 
-    // Loading Baseline Historical Data
+    println("######################### Loading Baseline Historical Data")
     val weatherData = loadObservations(sqlContext, "../weatherdata/data/input/NZ_Weather_History.tsv")
 
-    // Loading Weather Stations Information
+    println("######################### Loading Weather Stations Information")
     val weatherStations = loadWeatherStations(sqlContext, "../weatherdata/data/input/NZ_Weather_Station.tsv")
 
     // Create an daily DateTimeIndex over 30th of April 2009 and 30th of April September 2011
@@ -43,7 +37,7 @@ object TimeSeries {
       ZonedDateTime.of(LocalDateTime.parse("2011-04-30T00:00:00"), zone),
       new DayFrequency(1))
 
-    // Align the weather data on the DateTimeIndex to create a TimeSeriesRDD
+    println("######################## Aligning weather data on DateTimeIndex creating TimeSeriesRDD")
     val pressureTsrdd = TimeSeriesRDD.timeSeriesRDDFromObservations(dtIndex, weatherData, "timestamp", "station", "pressure")
     val humidityTsrdd = TimeSeriesRDD.timeSeriesRDDFromObservations(dtIndex, weatherData, "timestamp", "station", "humidity")
     val tempTsrdd = TimeSeriesRDD.timeSeriesRDDFromObservations(dtIndex, weatherData, "timestamp", "station", "temp")
@@ -56,21 +50,19 @@ object TimeSeries {
     rainTsrdd.cache()
     dateRangeRdd.cache()
 
-    println("######################### Impute missing values utilising linear interpolations #################################")
+    println("######################### Impute missing values utilising linear interpolations")
     val pressureFilled = pressureTsrdd.fill("linear")
     val humidityfilled = humidityTsrdd.fill("linear")
     val tempfilled = tempTsrdd.fill("linear")
     val rainfilled = rainTsrdd.fill("linear")
 
-    println("######################### Applying Arima Model and generating predictions #################################")
-    // Applying model and generating predictions
+    println("########################## Applying Arima Model and generating predictions")
     val pressureForecastTsrdd = pressureFilled.map(x => (x._1, x._2, ARIMA.fitModel(1,0,1, x._2).forecast(x._2, extraDays)))
     val humidityForecastTsrdd = humidityfilled.map(x => (x._1, x._2, ARIMA.fitModel(1,0,1, x._2).forecast(x._2, extraDays)))
     val tempForecastTsrdd = tempfilled.map(x => (x._1, x._2, ARIMA.fitModel(1,0,1, x._2).forecast(x._2, extraDays)))
     val rainForecastTsrdd = rainfilled.map(x => (x._1, x._2, ARIMA.fitModel(1,0,1, x._2).forecast(x._2, extraDays)))
 
-
-    // Creating Dataframes/Tables
+    println("######################### Creating dataframes and registering tables")
     tempForecastTsrdd.map(x =>  x._3.toArray).toDS().toDF().registerTempTable("temp_table")
     pressureForecastTsrdd.map(x => x._3.toArray).toDS().toDF().registerTempTable("pressure_table")
     humidityForecastTsrdd.map(x =>  x._3.toArray).toDS().toDF().registerTempTable("humidity_table")
@@ -79,14 +71,13 @@ object TimeSeries {
     val dateRangeDf = dateRangeRdd.map(x => x.toString).toDF("date")
     val iataDf = tempForecastTsrdd.map(x => x._1).toDF()
     val numStations = iataDf.count().toInt
-    // TODO: Fix that -> make it dynamic
+    // TODO: make it dynamic
     val stationDf = weatherData.select("station").unionAll(weatherData.select("station")).cache()
 
-    println("####################################### Number of weather stations: " + numStations)
+    println("######################### Number of weather stations: " + numStations)
 
-    // TODO: Fix that -> make it dynamic
+    // TODO: make it dynamic
     dateRangeDf.unionAll(dateRangeDf).unionAll(dateRangeDf).unionAll(dateRangeDf).unionAll(dateRangeDf).registerTempTable("date_table")
-
 
     val stationSchema = StructType(
       Array(StructField("station_id", LongType, nullable=false),StructField("station",StringType,nullable=false))
@@ -100,6 +91,7 @@ object TimeSeries {
     val tempSchema = StructType(
       Array(StructField("temp_id", LongType, nullable=false),StructField("temp",DoubleType,nullable=false))
     )
+
     val tempRdd = tempDf.rdd.zipWithUniqueId.map{
       case (r: Row, id: Long) => Row.fromSeq(id +: r.toSeq)}
     sqlContext.createDataFrame(tempRdd, tempSchema).registerTempTable("temp_table2")
@@ -141,7 +133,11 @@ object TimeSeries {
       case (r: Row, id: Long) => Row.fromSeq(id +: r.toSeq)}
     sqlContext.createDataFrame(dateRdd, dateSchema).registerTempTable("date_table2")
 
-    println("############################### Joining time series and Generating conditions #################################")
+    // Registering Utils.roundDouble and Utils.doubleToInt functions for sql use
+    sqlContext.udf.register("roundDouble", roundDouble(_:Double))
+    sqlContext.udf.register("doubleToInt", doubleToInt(_:Double))
+
+    println("######################### Joining dataframes and generating conditions")
 
     val combinedDf = sqlContext.sql(
       "SELECT station " +
@@ -159,9 +155,9 @@ object TimeSeries {
         "     ELSE " +
         "       'Sunny' " +
         "     END AS condition" +
-        "     ,temp" +
-        "     ,pressure" +
-        "     ,humidity " +
+        "     ,roundDouble(temp) AS temperature " +
+        "     ,roundDouble(pressure) AS pressure " +
+        "     ,doubleToInt(humidity) AS humidity " +
         "FROM date_table2 dt " +
         "LEFT JOIN rain_table2 rt ON rt.rain_id = dt.date_id " +
         "LEFT JOIN temp_table2 tt ON tt.temp_id = dt.date_id " +
@@ -169,19 +165,9 @@ object TimeSeries {
         "LEFT JOIN humidity_table2 ht ON ht.humidity_id = dt.date_id " +
         "LEFT JOIN station_table st ON st.station_id = dt.date_id " +
         "LEFT JOIN station_info_table sit ON sit.iata = st.station")
-    
-    combinedDf.show()
 
-    val tempDest = "../weatherdata/data/output/temp/partitionsweathertestdata.txt"
-    FileUtil.fullyDelete(new File(tempDest))
 
-    val dest = "../weatherdata/data/output/weathertestdata.txt"
-    FileUtil.fullyDelete(new File(dest))
-
-    combinedDf.rdd.map(x => x.mkString("|")).saveAsTextFile(tempDest)
-
-    println("################################ MERGING OUTPUT FILES  ##############################################")
-    mergePartitions(tempDest, dest)
-
+    println("######################### Writing output file")
+    writeOutput(combinedDf.rdd.map(x => x.mkString("|")))
   }
 }

@@ -7,18 +7,16 @@ import org.joda.time._
 
 
 object Utils {
-  def average(doubleList: List[Double]): Double = {
-    doubleList.foldLeft(0.0)(_+_) / doubleList.length
+
+  def numberCleaner(v: String) = {
+    v.replaceAll( """[,\s]""", "")
   }
 
-  def truncDouble(double: Double): Double = {
-    double - (double % 0.1)
-  }
-
-  def mergePartitions(srcPath: String, dstPath: String): Unit =  {
-    val hadoopConfig = new Configuration()
-    val hdfs = FileSystem.get(hadoopConfig)
-    FileUtil.copyMerge(hdfs, new Path(srcPath), hdfs, new Path(dstPath), false, hadoopConfig, null)
+  def average(doubleList: List[Double]): Option[Double] = {
+     doubleList.isEmpty match {
+       case true => None
+       case _ => Some(doubleList.foldLeft(0.0)(_+_) / doubleList.length)
+     }
   }
 
   def calculateDateRange(from: DateTime, until: DateTime, extraDays: Int): Seq[DateTime] = {
@@ -27,8 +25,18 @@ object Utils {
         for (f <- 0 to numberOfDays) yield from.plusDays(f)
   }
 
-  def weatherConditions(rainFall: List[Double], temp: List[Double]): List[String] = {
-    val wConditions = List()
-    wConditions
+  // IO Utils
+  def mergePartitions(srcPath: String, dstPath: String) =  {
+    val hadoopConfig = new Configuration()
+    val hdfs = FileSystem.get(hadoopConfig)
+    FileUtil.copyMerge(hdfs, new Path(srcPath), hdfs, new Path(dstPath), false, hadoopConfig, null)
+  }
+
+  // UDFs for SQL use. Not Option{} allowed
+  def roundDouble(double: Double): Double = {
+    Math.round(double*100.0)/100.0
+  }
+  def doubleToInt(double: Double): Int ={
+    double.toInt
   }
 }
